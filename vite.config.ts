@@ -5,10 +5,9 @@ import {fileURLToPath} from 'url';
 import {defineConfig} from 'vite';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
-const repoName = path.basename(__dirname);
 
 export default defineConfig({
-  base: `/${repoName}/`,
+  base: '/',
   plugins: [react(), tailwindcss()],
   resolve: {
     alias: {

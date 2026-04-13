@@ -23,9 +23,10 @@ chmod +x setup.sh && ./setup.sh
 
 ## Deploy to GitHub Pages
 
-This repository is configured for GitHub Pages as a project site.
+This repository is configured for GitHub Pages at `port-to-py.github.io`.
 
 1. Push your changes to `main`.
 2. In GitHub, open `Settings` > `Pages`.
 3. Set `Build and deployment` to `GitHub Actions`.
 4. The workflow in `.github/workflows/deploy.yml` will build and publish the app automatically.
+5. The `public/CNAME` file keeps the Pages custom domain aligned with `port-to-py.github.io`.
