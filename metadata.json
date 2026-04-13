@@ -1,0 +1,5 @@
+{
+  "name": "Coded Portugol to Python Converter",
+  "description": "An IDE-like application that translates Portugol code to Python in real-time, providing explanations and a step-by-step execution mode to help students learn Python.",
+  "requestFramePermissions": []
+}
