@@ -10,7 +10,6 @@ import {
   Copy,
   Trash2,
   Check,
-  X,
   ChevronRight,
   Square,
   Database,
@@ -19,7 +18,8 @@ import {
   Maximize,
   Minimize,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  ChevronLeft
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from './lib/utils';
@@ -33,6 +33,22 @@ const DEFAULT_PORTUGOL = `programa {
 const MONO_FONT = 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace';
 
 type VariableHistoryType = { val: any; op?: string; env?: Record<string, any> };
+type DebugCommand = 'forward' | 'back' | 'stop';
+type DebugSnapshot = {
+  pc: number;
+  variables: Record<string, any>;
+  variableHistory: Record<string, { currentValue: any; history: VariableHistoryType[] }>;
+  consoleOutput: string[];
+  loopState: Record<number, { initialized: boolean }>;
+  callStack: { returnPc: number, restoredParams: Record<string, any>, assignTo?: string }[];
+};
+
+const cloneDebugValue = <T,>(value: T): T => {
+  if (typeof structuredClone === 'function') {
+    return structuredClone(value);
+  }
+  return JSON.parse(JSON.stringify(value));
+};
 
 export default function App() {
   const [portugolCode, setPortugolCode] = useState(DEFAULT_PORTUGOL);
@@ -60,7 +76,7 @@ export default function App() {
   const lineNumbersRef = useRef<HTMLDivElement>(null);
   const syntaxHighlightRef = useRef<HTMLDivElement>(null);
   const lineHighlightRef = useRef<HTMLDivElement>(null);
-  const debugResolveRef = useRef<(() => void) | null>(null);
+  const debugCommandRef = useRef<((command: DebugCommand) => void) | null>(null);
   const cancelExecutionRef = useRef<boolean>(false);
   const executionSpeedRef = useRef<number>(100);
 
@@ -278,19 +294,24 @@ export default function App() {
     }
   };
 
-  const handleNextStep = () => {
-    if (debugResolveRef.current) {
-      debugResolveRef.current();
-      debugResolveRef.current = null;
+  const sendDebugCommand = (command: DebugCommand) => {
+    if (debugCommandRef.current) {
+      debugCommandRef.current(command);
+      debugCommandRef.current = null;
     }
+  };
+
+  const handleNextStep = () => {
+    sendDebugCommand('forward');
+  };
+
+  const handleRewindStep = () => {
+    sendDebugCommand('back');
   };
 
   const handleStopDebug = () => {
     cancelExecutionRef.current = true;
-    if (debugResolveRef.current) {
-      debugResolveRef.current();
-      debugResolveRef.current = null;
-    }
+    sendDebugCommand('stop');
   };
 
   const evaluateExpression = (expr: string, vars: Record<string, any>) => {
@@ -327,10 +348,13 @@ export default function App() {
     if (isExecuting) return;
     
     setIsExecuting(true);
-    setConsoleOutput(["[Iniciando execução...]"]);
+    let currentConsoleOutput = ["[Iniciando execução...]"];
+    setConsoleOutput(currentConsoleOutput);
     setActiveVariables({});
     setDebugMode(stepByStep);
     cancelExecutionRef.current = false;
+    setIsDebugPaused(false);
+    setCurrentLine(null);
 
     const lines = portugolCode.split('\n');
     let variables: Record<string, any> = {};
@@ -358,6 +382,9 @@ export default function App() {
     const blockMap: Record<number, number> = {};
     const stack: number[] = [];
     const functionsMap: Record<string, { startIdx: number, params: string[], endIdx: number }> = {};
+    const loopState: Record<number, { initialized: boolean }> = {};
+    const callStack: { returnPc: number, restoredParams: Record<string, any>, assignTo?: string }[] = [];
+    const debugSnapshots: DebugSnapshot[] = [];
     
     for (let i = 0; i < lines.length; i++) {
       const line = lines[i].trim();
@@ -387,11 +414,64 @@ export default function App() {
     if (functionsMap['inicio']) {
       pc = functionsMap['inicio'].startIdx + 1;
     }
-    const loopState: Record<number, { initialized: boolean }> = {};
-    const callStack: { returnPc: number, restoredParams: Record<string, any>, assignTo?: string }[] = [];
+
+    const syncVisibleState = () => {
+      setActiveVariables(cloneDebugValue(variableHistory));
+      setConsoleOutput([...currentConsoleOutput]);
+      setCurrentLine(pc);
+      setIsDebugPaused(stepByStep);
+    };
+
+    const createSnapshot = (): DebugSnapshot => ({
+      pc,
+      variables: cloneDebugValue(variables),
+      variableHistory: cloneDebugValue(variableHistory),
+      consoleOutput: cloneDebugValue(currentConsoleOutput),
+      loopState: cloneDebugValue(loopState),
+      callStack: cloneDebugValue(callStack)
+    });
+
+    const pushSnapshot = () => {
+      debugSnapshots.push(createSnapshot());
+    };
+
+    const restoreSnapshot = (snapshot: DebugSnapshot) => {
+      pc = snapshot.pc;
+      variables = cloneDebugValue(snapshot.variables);
+      variableHistory = cloneDebugValue(snapshot.variableHistory);
+      currentConsoleOutput = cloneDebugValue(snapshot.consoleOutput);
+      Object.keys(loopState).forEach(key => delete loopState[Number(key)]);
+      Object.assign(loopState, cloneDebugValue(snapshot.loopState));
+      callStack.length = 0;
+      callStack.push(...cloneDebugValue(snapshot.callStack));
+      setActiveVariables(cloneDebugValue(variableHistory));
+      setConsoleOutput([...currentConsoleOutput]);
+      setCurrentLine(pc);
+      setIsDebugPaused(true);
+    };
+
+    const waitForDebugCommand = () => new Promise<DebugCommand>(resolve => {
+      debugCommandRef.current = resolve;
+    });
+
+    if (stepByStep) {
+      pushSnapshot();
+    }
 
     while (pc < lines.length) {
       if (cancelExecutionRef.current) break;
+      if (stepByStep) {
+        syncVisibleState();
+        const command = await waitForDebugCommand();
+        if (command === 'stop') break;
+        if (command === 'back') {
+          if (debugSnapshots.length > 1) {
+            debugSnapshots.pop();
+            restoreSnapshot(debugSnapshots[debugSnapshots.length - 1]);
+          }
+          continue;
+        }
+      }
       setCurrentLine(pc);
       const line = lines[pc].trim();
       
@@ -420,6 +500,7 @@ export default function App() {
                 const endOfSenao = blockMap[pc + 1];
                 if (endOfSenao !== undefined) {
                   pc = endOfSenao + 1;
+                  if (stepByStep) pushSnapshot();
                   continue;
                 }
               }
@@ -441,11 +522,13 @@ export default function App() {
                 }
               }
               pc = startLineIdx;
+              if (stepByStep) pushSnapshot();
               continue;
             }
           }
         }
         pc++;
+        if (stepByStep) pushSnapshot();
         continue;
       }
 
@@ -454,10 +537,12 @@ export default function App() {
           const endIdx = blockMap[pc];
           if (endIdx !== undefined) {
             pc = endIdx + 1;
+            if (stepByStep) pushSnapshot();
             continue;
           }
         }
         pc++;
+        if (stepByStep) pushSnapshot();
         continue;
       }
 
@@ -481,6 +566,7 @@ export default function App() {
           if (!evaluateExpression(condition, variables)) {
             pc = blockMap[pc] + 1;
             delete loopState[pc];
+            if (stepByStep) pushSnapshot();
             continue;
           }
         }
@@ -492,6 +578,7 @@ export default function App() {
           const condition = match[1].trim();
           if (!evaluateExpression(condition, variables)) {
             pc = blockMap[pc] + 1;
+            if (stepByStep) pushSnapshot();
             continue;
           }
         }
@@ -508,9 +595,11 @@ export default function App() {
               const nextLine = lines[endOfIf + 1]?.trim();
               if (nextLine && nextLine.startsWith('senao')) {
                 pc = endOfIf + 1; // Jump to 'senao' line, next iteration will enter it
+                if (stepByStep) pushSnapshot();
                 continue;
               } else {
                 pc = endOfIf + 1; // Skip the IF block
+                if (stepByStep) pushSnapshot();
                 continue;
               }
             }
@@ -532,7 +621,8 @@ export default function App() {
             const val = evaluateExpression(content, variables);
             output = val !== null && val !== undefined ? String(val) : content.replace(/"/g, '');
           }
-          setConsoleOutput(prev => [...prev, `> ${output}`]);
+          currentConsoleOutput = [...currentConsoleOutput, `> ${output}`];
+          setConsoleOutput([...currentConsoleOutput]);
         }
       }
       // Handle 'retorne'
@@ -613,25 +703,24 @@ export default function App() {
       }
 
       if (stepByStep) {
-        setIsDebugPaused(true);
-        setActiveVariables(JSON.parse(JSON.stringify(variableHistory)));
-        await new Promise<void>(resolve => {
-          debugResolveRef.current = resolve;
-        });
-        setIsDebugPaused(false);
+        pc++;
+        pushSnapshot();
       } else {
-        setActiveVariables(JSON.parse(JSON.stringify(variableHistory)));
+        setActiveVariables(cloneDebugValue(variableHistory));
         const delay = executionSpeedRef.current === 0 ? 1000000 : 200 * (100 / executionSpeedRef.current);
         await new Promise(resolve => setTimeout(resolve, delay));
+        pc++;
       }
-      pc++;
     }
 
-    setActiveVariables(JSON.parse(JSON.stringify(variableHistory)));
-    setConsoleOutput(prev => [...prev, cancelExecutionRef.current ? "[Execução interrompida]" : "[Execução finalizada]"]);
+    setActiveVariables(cloneDebugValue(variableHistory));
+    currentConsoleOutput = [...currentConsoleOutput, cancelExecutionRef.current ? "[Execução interrompida]" : "[Execução finalizada]"];
+    setConsoleOutput(currentConsoleOutput);
     setIsExecuting(false);
     setCurrentLine(null);
     setDebugMode(false);
+    setIsDebugPaused(false);
+    debugCommandRef.current = null;
   };
 
   return (
@@ -731,8 +820,7 @@ export default function App() {
                 {isExecuting ? (
                   <button 
                     onClick={() => {
-                      cancelExecutionRef.current = true;
-                      if (debugResolveRef.current) debugResolveRef.current();
+                      handleStopDebug();
                     }}
                     className="flex items-center gap-1.5 px-3 py-1 bg-red-600 hover:bg-red-500 rounded text-xs font-medium transition-all active:scale-95 cursor-pointer shadow-red-900/10"
                   >
@@ -968,7 +1056,7 @@ export default function App() {
                 >
                   <span className="text-white/50 font-mono tracking-wider opacity-60" style={{ fontSize: memoryFontSize * 0.85 }}>{key}</span>
                   <div className="flex flex-wrap items-center gap-1.5 mt-0.5">
-                    {value.history.map((hist, idx) => (
+                    {value.history.map((hist: VariableHistoryType, idx: number) => (
                       <div key={idx} className="flex items-center gap-1.5">
                         {hist.val !== undefined && hist.val !== null && (
                           <span className="font-mono text-white/30 line-through">
@@ -977,7 +1065,7 @@ export default function App() {
                         )}
                         {hist.op && (
                           <div className="flex bg-white/5 border border-white/10 px-1 py-0.5 rounded shadow-sm font-mono text-white/40" style={{ fontSize: memoryFontSize * 0.75 }}>
-                             {hist.op.split(/(\b[a-zA-Z_]\w*\b)/g).map((token, tIdx) => {
+                             {hist.op.split(/(\b[a-zA-Z_]\w*\b)/g).map((token: string, tIdx: number) => {
                                if (!token) return null;
                                const isVar = /^[a-zA-Z_]\w*$/.test(token) && hist.env && hist.env[token] !== undefined;
                                return (
@@ -1036,17 +1124,19 @@ export default function App() {
             
             <div className="flex items-center gap-2 ml-4">
               <button 
-                onClick={handleStopDebug}
-                className="p-2 bg-red-500/20 hover:bg-red-500/40 text-red-100 rounded-lg transition-colors cursor-pointer"
-                title="Interromper Execução"
+                onClick={handleRewindStep}
+                disabled={!isExecuting || currentLine === null}
+                className="p-2 bg-white/15 hover:bg-white/25 text-white rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Voltar um passo"
               >
-                <X className="w-4 h-4" />
+                <ChevronLeft className="w-4 h-4" />
               </button>
               <button 
                 onClick={handleNextStep}
-                className="px-4 py-2 bg-white text-orange-600 hover:bg-orange-50 font-bold text-xs rounded-lg transition-colors flex items-center gap-2 shadow-lg cursor-pointer"
+                disabled={!isExecuting || currentLine === null}
+                className="p-2 bg-white text-orange-600 hover:bg-orange-50 rounded-lg transition-colors cursor-pointer shadow-lg disabled:opacity-40 disabled:cursor-not-allowed"
+                title="Avançar um passo"
               >
-                Próximo
                 <ChevronRight className="w-4 h-4" />
               </button>
             </div>
