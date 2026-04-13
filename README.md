@@ -24,6 +24,7 @@ chmod +x setup.sh && ./setup.sh
 ## Deploy to GitHub Pages
 
 This repository is configured for GitHub Pages at `port-to-py.github.io`.
+The build uses relative asset paths so the same deployment also works if GitHub Pages serves it from a repository subpath.
 
 1. Push your changes to `main`.
 2. In GitHub, open `Settings` > `Pages`.
