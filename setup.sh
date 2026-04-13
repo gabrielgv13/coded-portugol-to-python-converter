@@ -15,14 +15,5 @@ fi
 echo "📦 Installing dependencies..."
 npm install
 
-# Check if .env.local exists, if not, create it from .env.example if available
-if [ ! -f .env.local ]; then
-    if [ -f .env.example ]; then
-        echo "📝 Creating .env.local from .env.example..."
-        cp .env.example .env.local
-        echo "⚠️  Remember to update GEMINI_API_KEY in .env.local"
-    fi
-fi
-
 echo "✅ Environment ready!"
 echo "▶️  Run 'npm run dev' to start the application."
