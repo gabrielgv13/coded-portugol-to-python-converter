@@ -16,7 +16,6 @@ import {
   Plus,
   Minus,
   Maximize,
-  Minimize,
   ChevronDown,
   ChevronUp,
   ChevronLeft
@@ -70,15 +69,52 @@ export default function App() {
   const [memoryFontSize, setMemoryFontSize] = useState(14);
   const [footerHeight, setFooterHeight] = useState(208);
   const [isResizing, setIsResizing] = useState(false);
+  const [debugPanelPosition, setDebugPanelPosition] = useState<{ x: number; y: number } | null>(null);
 
   const consoleRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const lineNumbersRef = useRef<HTMLDivElement>(null);
   const syntaxHighlightRef = useRef<HTMLDivElement>(null);
   const lineHighlightRef = useRef<HTMLDivElement>(null);
+  const debugPanelRef = useRef<HTMLDivElement>(null);
   const debugCommandRef = useRef<((command: DebugCommand) => void) | null>(null);
   const cancelExecutionRef = useRef<boolean>(false);
   const executionSpeedRef = useRef<number>(100);
+  const debugDragOffsetRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  const clampDebugPosition = React.useCallback((x: number, y: number) => {
+    const panelWidth = debugPanelRef.current?.offsetWidth ?? 0;
+    const panelHeight = debugPanelRef.current?.offsetHeight ?? 0;
+    const maxX = Math.max(8, window.innerWidth - panelWidth - 8);
+    const maxY = Math.max(8, window.innerHeight - panelHeight - 8);
+    return {
+      x: Math.max(8, Math.min(x, maxX)),
+      y: Math.max(8, Math.min(y, maxY))
+    };
+  }, []);
+
+  const handleDebugPanelDragStart = React.useCallback((e: React.MouseEvent<HTMLDivElement>) => {
+    if (!debugPanelRef.current || e.button !== 0) return;
+    const rect = debugPanelRef.current.getBoundingClientRect();
+    debugDragOffsetRef.current = {
+      x: e.clientX - rect.left,
+      y: e.clientY - rect.top
+    };
+
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const nextX = moveEvent.clientX - debugDragOffsetRef.current.x;
+      const nextY = moveEvent.clientY - debugDragOffsetRef.current.y;
+      setDebugPanelPosition(clampDebugPosition(nextX, nextY));
+    };
+
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+  }, [clampDebugPosition]);
 
   const startResizing = React.useCallback((e: React.MouseEvent) => {
     setIsResizing(true);
@@ -111,6 +147,28 @@ export default function App() {
     );
     setExplanations(uniqueExplanations);
   }, [portugolCode]);
+
+  useEffect(() => {
+    if (!debugMode || currentLine === null) {
+      setDebugPanelPosition(null);
+      return;
+    }
+
+    if (debugPanelPosition !== null) {
+      return;
+    }
+
+    const initPosition = () => {
+      const panelWidth = debugPanelRef.current?.offsetWidth ?? 640;
+      const panelHeight = debugPanelRef.current?.offsetHeight ?? 160;
+      const defaultX = (window.innerWidth - panelWidth) / 2;
+      const defaultY = window.innerHeight - panelHeight - 96;
+      setDebugPanelPosition(clampDebugPosition(defaultX, defaultY));
+    };
+
+    const frame = requestAnimationFrame(initPosition);
+    return () => cancelAnimationFrame(frame);
+  }, [debugMode, currentLine, clampDebugPosition, debugPanelPosition]);
 
   useEffect(() => {
     if (consoleRef.current) {
@@ -1059,7 +1117,7 @@ export default function App() {
                     {value.history.map((hist: VariableHistoryType, idx: number) => (
                       <div key={idx} className="flex items-center gap-1.5">
                         {hist.val !== undefined && hist.val !== null && (
-                          <span className="font-mono text-white/30 line-through">
+                          <span className="font-mono text-white/30 line-through whitespace-pre">
                             {typeof hist.val === 'string' ? `"${hist.val}"` : String(hist.val)}
                           </span>
                         )}
@@ -1072,7 +1130,7 @@ export default function App() {
                                  <div key={tIdx} className="flex flex-col items-center">
                                    <span className="leading-none whitespace-pre">{token}</span>
                                    {isVar && (
-                                     <span className="font-bold text-sky-400 mt-0.5 leading-none" style={{ fontSize: memoryFontSize * 0.65 }}>
+                                     <span className="font-bold text-sky-400 mt-0.5 leading-none whitespace-pre" style={{ fontSize: memoryFontSize * 0.65 }}>
                                        {typeof hist.env![token] === 'string' ? `"${hist.env![token]}"` : String(hist.env![token])}
                                      </span>
                                    )}
@@ -1085,7 +1143,7 @@ export default function App() {
                       </div>
                     ))}
                     {value.currentValue !== undefined && value.currentValue !== null && (
-                      <span className="font-mono text-emerald-400 font-bold">
+                      <span className="font-mono text-emerald-400 font-bold whitespace-pre">
                         {typeof value.currentValue === 'string' ? `"${value.currentValue}"` : String(value.currentValue)}
                       </span>
                     )}
@@ -1106,39 +1164,55 @@ export default function App() {
       <AnimatePresence>
         {debugMode && currentLine !== null && (
           <motion.div 
-            initial={{ y: 100, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: 100, opacity: 0 }}
-            className="fixed bottom-60 left-1/2 -translate-x-1/2 bg-orange-600 text-white px-8 py-4 rounded-2xl shadow-2xl flex items-center gap-6 z-50 border border-orange-400/30"
+            ref={debugPanelRef}
+            initial={{ scale: 0.96, opacity: 0 }}
+            animate={{ scale: 1, opacity: 1 }}
+            exit={{ scale: 0.96, opacity: 0 }}
+            className="fixed bg-orange-600 text-white px-8 py-4 rounded-2xl shadow-2xl flex flex-col gap-3 z-50 border border-orange-400/30"
+            style={{
+              left: debugPanelPosition?.x ?? 24,
+              top: debugPanelPosition?.y ?? 24
+            }}
           >
-            <div className="flex flex-col">
-              <span className="text-[9px] uppercase font-black tracking-widest opacity-60">Execução Passo a Passo</span>
-              <span className="text-base font-bold">Linha {currentLine + 1}</span>
+            <div
+              onMouseDown={handleDebugPanelDragStart}
+              className="-mx-4 -mt-1 px-4 py-1.5 rounded-lg bg-black/10 cursor-move select-none flex items-center justify-between"
+              title="Arraste para mover"
+            >
+              <span className="text-[10px] uppercase tracking-widest font-bold opacity-75">Janela de Debug</span>
+              <Maximize className="w-3.5 h-3.5 opacity-80" />
             </div>
-            <div className="w-px h-10 bg-white/20" />
-            <div className="max-w-xs">
-              <p className="text-xs font-medium leading-tight">
-                {explanations.find(e => e.line === currentLine + 1)?.text || "Processando instrução..."}
-              </p>
-            </div>
-            
-            <div className="flex items-center gap-2 ml-4">
-              <button 
-                onClick={handleRewindStep}
-                disabled={!isExecuting || currentLine === null}
-                className="p-2 bg-white/15 hover:bg-white/25 text-white rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Voltar um passo"
-              >
-                <ChevronLeft className="w-4 h-4" />
-              </button>
-              <button 
-                onClick={handleNextStep}
-                disabled={!isExecuting || currentLine === null}
-                className="p-2 bg-white text-orange-600 hover:bg-orange-50 rounded-lg transition-colors cursor-pointer shadow-lg disabled:opacity-40 disabled:cursor-not-allowed"
-                title="Avançar um passo"
-              >
-                <ChevronRight className="w-4 h-4" />
-              </button>
+
+            <div className="flex items-center gap-6">
+              <div className="flex flex-col">
+                <span className="text-[9px] uppercase font-black tracking-widest opacity-60">Execução Passo a Passo</span>
+                <span className="text-base font-bold">Linha {currentLine + 1}</span>
+              </div>
+              <div className="w-px h-10 bg-white/20" />
+              <div className="max-w-xs">
+                <p className="text-xs font-medium leading-tight">
+                  {explanations.find(e => e.line === currentLine + 1)?.text || "Processando instrução..."}
+                </p>
+              </div>
+              
+              <div className="flex items-center gap-2 ml-4">
+                <button 
+                  onClick={handleRewindStep}
+                  disabled={!isExecuting || currentLine === null}
+                  className="p-2 bg-white/15 hover:bg-white/25 text-white rounded-lg transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Voltar um passo"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <button 
+                  onClick={handleNextStep}
+                  disabled={!isExecuting || currentLine === null}
+                  className="p-2 bg-white text-orange-600 hover:bg-orange-50 rounded-lg transition-colors cursor-pointer shadow-lg disabled:opacity-40 disabled:cursor-not-allowed"
+                  title="Avançar um passo"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
+              </div>
             </div>
           </motion.div>
         )}
